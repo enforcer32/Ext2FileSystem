@@ -59,12 +59,7 @@ namespace FileSystem
 			return;
 		}
 
-		std::shared_ptr<Ext2Inode> inodebuf;
-		if (path[0] != '/')
-			inodebuf = GetInodeFromPath(m_CurrentPath + path);
-		else
-			inodebuf = GetInodeFromPath(path);
-
+		std::shared_ptr<Ext2Inode> inodebuf = GetInodeFromPath(path);
 		if (!inodebuf)
 		{
 			LOGGER_ERROR("Failed to Get: {}", path);
@@ -82,16 +77,11 @@ namespace FileSystem
 		if (path == "/")
 		{
 			LOGGER_INFO("Switched Directory To: {}", path);
-			m_CurrentPath == "/";
+			m_CurrentPath = "/";
 			return;
 		}
 
-		std::shared_ptr<Ext2Inode> inodebuf;
-		if (path[0] != '/')
-			inodebuf = GetInodeFromPath(m_CurrentPath + path);
-		else
-			inodebuf = GetInodeFromPath(path);
-
+		std::shared_ptr<Ext2Inode> inodebuf = GetInodeFromPath(path);
 		if (!inodebuf)
 		{
 			LOGGER_ERROR("No Such Directory: {}", path);
@@ -105,10 +95,40 @@ namespace FileSystem
 		}
 
 		LOGGER_INFO("Switched Directory To: {}", path);
-		if (path[0] != '/')
+		if (m_CurrentPath != "/" && path[0] != '/')
+			m_CurrentPath += "/" + path;
+		else if(m_CurrentPath == "/" && path[0] != '/')
 			m_CurrentPath = "/" + path;
 		else
 			m_CurrentPath = path;
+	}
+
+	void Ext2FileSystem::Cat(const std::string& path, size_t readsize)
+	{
+		std::shared_ptr<Ext2Inode> inode = GetInodeFromPath(path);
+		if (!inode)
+		{
+			LOGGER_ERROR("Failed to Cat: {}", path);
+			return;
+		}
+
+		if (!(inode->Mode & (uint16_t)Ext2InodeType::RegularFile))
+		{
+			LOGGER_ERROR("Not a FILE: {}", path);
+			return;
+		}
+
+		uint32_t size = readsize;
+		uint8_t* data = ReadFile(inode, size);
+		if (!data)
+		{
+			LOGGER_ERROR("Ext2ReadFile Failed");
+			return;
+		}
+		data[size - 1] = 0;
+
+		printf("Cat: %s, Size: %ld\n", path.c_str(), strlen((char*)data) + 1);
+		printf("%s\n", data);
 	}
 
 	bool Ext2FileSystem::ParseSuperblock()
@@ -222,14 +242,21 @@ namespace FileSystem
 
 	std::shared_ptr<Ext2Inode> Ext2FileSystem::GetInodeFromPath(const std::string& path)
 	{
-		Ext2Path parsedpath = Ext2ParsePath(path);
+		std::string fmtPath;
+		if (m_CurrentPath != "/" && path[0] != '/')
+			fmtPath = m_CurrentPath + "/" + path;
+		else
+			fmtPath = m_CurrentPath + path;
+
+		Ext2Path parsedpath = Ext2ParsePath(fmtPath);
 		if (!parsedpath)
 		{
-			LOGGER_ERROR("Failed to ParsePath: {}", path);
+			LOGGER_ERROR("Failed to ParsePath: {}", fmtPath);
 			return nullptr;
 		}
 
-		if (parsedpath.path == "/") return m_RootInode;
+		if (parsedpath.path == "/")
+			return m_RootInode;
 
 		auto node = m_RootInode;
 		for (uint32_t i = 0; i < parsedpath.parts.size(); i++)
@@ -237,13 +264,13 @@ namespace FileSystem
 			node = GetInodeFromDir(node, parsedpath.parts[i]);
 			if (!node)
 			{
-				LOGGER_ERROR("Failed to Get: {} From: {}", parsedpath.parts[i], path);
+				LOGGER_ERROR("Failed to Get: {} From: {}", parsedpath.parts[i], fmtPath);
 				return nullptr;
 			}
 
 			if (!(node->Mode & (uint16_t)Ext2InodeType::Directory))
 			{
-				LOGGER_ERROR("Not a Directory: {}", parsedpath.parts[i], path);
+				LOGGER_ERROR("Not a Directory: {}", parsedpath.parts[i], fmtPath);
 				return nullptr;
 			}
 		}
@@ -264,6 +291,91 @@ namespace FileSystem
 		memset(data, 0, m_Superblock->BlockSize);
 		stream.seekg(block * m_Superblock->BlockSize);
 		stream.read((char*)data, m_Superblock->BlockSize);
+		return data;
+	}
+
+	uint8_t* Ext2FileSystem::ReadFile(const std::shared_ptr<Ext2Inode>& inodebuf, size_t size)
+	{
+		if (!(inodebuf->Mode & (uint16_t)Ext2InodeType::RegularFile))
+			return nullptr;
+
+		uint32_t read = 0, curr = 0;
+		uint8_t* data = new uint8_t[size];
+		memset(data, 0, size);
+
+		for (size_t i = 0; i < EXT2_DBP_SIZE; i++)
+		{
+			if (inodebuf->DBP[i])
+			{
+				uint8_t* block = ReadBlock(inodebuf->DBP[i]);
+				while (read < size && curr < m_Superblock->BlockSize && block[curr])
+					data[read++] = block[curr++];
+				curr = 0;
+				delete[] block;
+
+				if (read >= size)
+					goto end;
+			}
+		}
+
+		if (read < size)
+		{
+			if (inodebuf->SIBP)
+			{
+				uint32_t* blocks = (uint32_t*)ReadBlock(inodebuf->SIBP);
+				for (size_t i = 0; i < m_Superblock->BlockSize / 4; i++)
+				{
+					if (blocks[i])
+					{
+						uint8_t* block = ReadBlock(blocks[i]);
+						while (read < size && curr < m_Superblock->BlockSize && block[curr])
+							data[read++] = block[curr++];
+						curr = 0;
+						delete[] block;
+
+						if (read >= size)
+							goto end;
+					}
+				}
+				delete blocks;
+			}
+
+			if (inodebuf->DIBP)
+			{
+				uint32_t* blocks = (uint32_t*)ReadBlock(inodebuf->DIBP);
+				for (uint32_t i = 0; i < m_Superblock->BlockSize / 4; i++)
+				{
+					if (blocks[i])
+					{
+						uint32_t* subblocks = (uint32_t*)ReadBlock(blocks[i]);
+						for (uint32_t i = 0; i < m_Superblock->BlockSize / 4; i++)
+						{
+							if (subblocks[i])
+							{
+								uint8_t* block = ReadBlock(subblocks[i]);
+								while (read < size && curr < m_Superblock->BlockSize && block[curr])
+									data[read++] = block[curr++];
+								curr = 0;
+								delete[] block;
+
+								if (read >= size)
+									goto end;
+							}
+						}
+						delete subblocks;
+					}
+				}
+				delete blocks;
+			}
+
+			if (inodebuf->TIBP)
+			{
+				LOGGER_CRITICAL("Ext2FS Doesn't Support Reading Triply Indirect Block Pointer\n");
+				throw std::runtime_error("Ext2FS Read TIBP");
+			}
+		}
+
+	end:
 		return data;
 	}
 

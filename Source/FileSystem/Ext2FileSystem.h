@@ -16,6 +16,7 @@ namespace FileSystem
 		bool OpenDevice(const std::string& devpath);
 		void LS(const std::string& path);
 		void CD(const std::string& path);
+		void Cat(const std::string& path, size_t readsize = 4096);
 
 	private:
 		bool ParseSuperblock();
@@ -26,6 +27,7 @@ namespace FileSystem
 		std::shared_ptr<Ext2Inode> GetInodeFromPath(const std::string& path);
 
 		uint8_t* ReadBlock(uint32_t block);
+		uint8_t* ReadFile(const std::shared_ptr<Ext2Inode>& inodebuf, size_t size);
 
 	public:
 		// DEBUG
@@ -38,8 +40,6 @@ namespace FileSystem
 	private:
 		std::string m_Device;
 		std::string m_CurrentPath;
-
-	private:
 		std::unique_ptr<Ext2Superblock> m_Superblock;
 		uint32_t m_FirstBlockGroup;
 		uint32_t m_BlockGroupDescriptorCount;

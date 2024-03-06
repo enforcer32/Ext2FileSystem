@@ -20,7 +20,7 @@ std::vector<std::string> StringSplit(const std::string& str, char delim)
 
 void PrintHelp()
 {
-	std::cout << "Commands:\n1. help\n2. exit\n3. ls\n4. cd\n";
+	std::cout << "Commands:\n1. help\n2. exit\n3. clear\n4. ls\n5. cd\n6. cat\n";
 }
 
 int main()
@@ -57,6 +57,10 @@ int main()
 			quit = true;
 			continue;
 		}
+		else if (args[0] == "clear")
+		{
+			linenoise::linenoiseClearScreen();
+		}
 		else if (args[0] == "ls")
 		{
 			if (args.size() == 1)
@@ -69,6 +73,15 @@ int main()
 			if (args.size() == 1)
 				std::cout << "cd [dir]\n";
 			else ext2fs->CD(args[1]);
+		}
+		else if (args[0] == "cat")
+		{
+			if (args.size() == 1)
+				std::cout << "cat [file]\n";
+			else if (args.size() == 3)
+				ext2fs->Cat(args[1], std::atoi(args[2].c_str()));
+			else
+				ext2fs->Cat(args[1]);
 		}
 		else
 		{
